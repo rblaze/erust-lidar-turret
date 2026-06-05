@@ -1,0 +1,46 @@
+on: [push]
+
+name: Auto build
+
+jobs:
+  fmt:
+    name: "Run rustfmt and clippy"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Install toolchain"
+        run: rustup toolchain install stable --profile minimal -c rustfmt,clippy -t thumbv6m-none-eabi
+      - name: "Install libraries and gcc-arm"
+        run: |
+          sudo apt-get update
+          sudo apt-get install libclang-dev llvm-dev gcc-arm-none-eabi
+      - name: "Check formatting in root"
+        run: cargo fmt --all --check
+      - name: "Run clippy for debug build in root"
+        run: cargo clippy --no-deps -- -D warnings
+      - name: "Run clippy for release build in root"
+        run: cargo clippy --release --no-deps -- -D warnings
+      - name: "Check formatting in cross"
+        run: cd cross && cargo fmt --all --check
+      - name: "Run clippy for debug build in cross"
+        run: cd cross && cargo clippy --no-deps -- -D warnings
+      - name: "Run clippy for release build in cross"
+        run: cd cross && cargo clippy --release --no-deps -- -D warnings
+
+  build:
+    name: "Debug and release builds"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Install toolchain"
+        run: rustup toolchain install stable -t thumbv6m-none-eabi
+      - name: "Install libraries and gcc-arm"
+        run: |
+          sudo apt-get update
+          sudo apt-get install libclang-dev llvm-dev gcc-arm-none-eabi
+      - name: "Run tests"
+        run: cargo test
+      - name: "Debug build"
+        run: cd cross/app && cargo build
+      - name: "Release build"
+        run: cd cross/app && cargo build --release
