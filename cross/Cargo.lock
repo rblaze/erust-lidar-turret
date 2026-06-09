@@ -207,7 +207,7 @@ dependencies = [
 [[package]]
 name = "stm32g0-hal"
 version = "0.2.1"
-source = "git+https://github.com/rblaze/erust-stm32g0-hal.git#36326d9ec416071b0ba135526b6e8e84c617026c"
+source = "git+https://github.com/rblaze/erust-stm32g0-hal.git#b320a9ac39c65dd359e889c6c091ff3d82a8cb22"
 dependencies = [
  "cortex-m",
  "critical-section",

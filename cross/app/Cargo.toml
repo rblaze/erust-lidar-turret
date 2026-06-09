@@ -18,6 +18,10 @@ stm32g0-hal = { git = "https://github.com/rblaze/erust-stm32g0-hal.git", feature
     "stm32g071",
 ] }
 
+# stm32g0-hal = { path = "../../../erust-stm32g0-hal", features = [
+#     "stm32g071",
+# ] }
+
 [[bin]]
 name = "lidar-turret"
 test = false
