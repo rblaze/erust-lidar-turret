@@ -2,13 +2,19 @@
 #![no_main]
 #![deny(unsafe_code)]
 
+mod env;
+mod system_time;
+
 use core::cell::{Cell, RefCell};
 use core::panic::PanicInfo;
+use core::pin::pin;
 
-use cortex_m::asm::delay;
+use async_scheduler::executor::LocalExecutor;
+use async_scheduler::sync::mailbox::Mailbox;
 use cortex_m_rt::entry;
 use critical_section::Mutex;
 use embedded_hal::pwm::SetDutyCycle;
+use futures::task::LocalFutureObj;
 use rtt_target::debug_rprintln;
 #[cfg(debug_assertions)]
 use rtt_target::rtt_init_print;
@@ -23,12 +29,26 @@ use stm32g0_hal::timer::TimerExt;
 
 use firmware::error::Error;
 
+use crate::env::Env;
+use crate::system_time::Ticker;
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     debug_rprintln!("{}", info);
 
     cortex_m::asm::bkpt();
     cortex_m::asm::udf();
+}
+
+async fn panic_if_exited<F: core::future::Future<Output: core::fmt::Debug>>(f: F) {
+    panic!("future exited with {:?}", f.await)
+}
+
+async fn lidar_task() -> Result<(), Error> {
+    loop {
+        LIDAR_UPDATE_EVENT.read().await?;
+        debug_rprintln!("dma event");
+    }
 }
 
 #[entry]
@@ -39,7 +59,7 @@ fn main() -> ! {
 
         debug_rprintln!("starting");
 
-        let _cp = CorePeripherals::take().ok_or(Error::AlreadyTaken)?;
+        let cp = CorePeripherals::take().ok_or(Error::AlreadyTaken)?;
         let dp = Peripherals::take().ok_or(Error::AlreadyTaken)?;
 
         // Enable debug while stopped to keep probe-rs happy while WFI
@@ -208,6 +228,11 @@ fn main() -> ! {
         // delay(rcc.sysclk().to_Hz());
         debug_rprintln!("entering control loop");
 
+        let env = Env::new(Ticker::new(cp.SYST, &rcc));
+        LocalExecutor::new(&env).run([LocalFutureObj::new(pin!(panic_if_exited(lidar_task())))]);
+
+        unreachable!()
+
         // for ch in [0x5a, 0x04, 0x01, 0x00] {
         //     while usart.isr().read().txe().bit_is_clear() {}
         //     debug_rprintln!("sending {:02x}", ch);
@@ -217,12 +242,6 @@ fn main() -> ! {
         // while usart.isr().read().tc().bit_is_clear() {}
 
         // debug_rprintln!("done sending");
-
-        loop {
-            cortex_m::asm::wfi();
-            // let frame = critical_section::with(|cs| LAST_FRAME.borrow(cs).get());
-            // debug_rprintln!("frame {:x?}", frame.data);
-        }
 
         // loop {
         // for _ in 0..NUM_SPEED_POINTS {
@@ -280,20 +299,22 @@ const LIDAR_BUFFER_SIZE: usize = 1024;
 static LIDAR_DMA_BUFFER: Mutex<Cell<[u8; LIDAR_BUFFER_SIZE]>> =
     Mutex::new(Cell::new([0; LIDAR_BUFFER_SIZE]));
 
+static LIDAR_UPDATE_EVENT: Mailbox<()> = Mailbox::new();
+
 #[interrupt]
 fn DMA1_CHANNEL1() {
     #[allow(unsafe_code)]
     let rx_dma = unsafe { DMA1::steal() };
 
     if rx_dma.isr().read().htif1().is_half() {
-        debug_rprintln!("half buffer");
         // TODO: copy half data
         rx_dma.ifcr().write(|w| w.chtif1().clear());
     }
 
     if rx_dma.isr().read().tcif1().is_complete() {
-        debug_rprintln!("full buffer");
         // TODO: copy second half data
         rx_dma.ifcr().write(|w| w.ctcif1().clear());
     }
+
+    LIDAR_UPDATE_EVENT.post(());
 }

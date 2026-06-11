@@ -4,4 +4,6 @@ use thiserror::Error;
 pub enum Error {
     #[error("peripherals already initialized")]
     AlreadyTaken,
+    #[error(transparent)]
+    Mailbox(#[from] async_scheduler::mailbox::Error),
 }
