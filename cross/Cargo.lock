@@ -88,7 +88,9 @@ name = "firmware"
 version = "0.1.0"
 dependencies = [
  "async-scheduler",
+ "embedded-hal 1.0.0",
  "fugit",
+ "rtt-target",
  "thiserror",
 ]
 
@@ -177,6 +179,7 @@ dependencies = [
  "critical-section",
  "embedded-hal 1.0.0",
  "firmware",
+ "fugit",
  "futures",
  "portable-atomic",
  "rtt-target",
