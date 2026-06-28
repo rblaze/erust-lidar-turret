@@ -95,7 +95,7 @@ fn main() -> ! {
         LocalExecutor::new(&env).run([
             LocalFutureObj::new(pin!(panic_if_exited(lidar_reader.task()))),
             LocalFutureObj::new(pin!(panic_if_exited(
-                motor_control.task(Duration::from_secs(1), Duration::from_secs(1))
+                motor_control.task(Duration::from_secs(1), Duration::from_secs(2))
             ))),
         ]);
 

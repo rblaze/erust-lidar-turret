@@ -27,7 +27,7 @@ impl LidarReader {
         Self {}
     }
 
-    fn init_usart(usart: USART2, rx_dma: &CH, dmamux: &DMAMUX,rcc: &Rcc) {
+    fn init_usart(usart: USART2, rx_dma: &CH, dmamux: &DMAMUX, rcc: &Rcc) {
         #[allow(unsafe_code)]
         unsafe {
             rx_dma

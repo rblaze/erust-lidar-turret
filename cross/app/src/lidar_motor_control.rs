@@ -19,7 +19,7 @@ pub struct LidarMotorControl {
 }
 
 impl LidarMotorControl {
-    const NUM_WHEEL_SLOTS: u32 = 25;
+    const NUM_WHEEL_SLOTS: u32 = 50;
 
     pub fn new(
         motor_pwm: Pwm<TIM3>,
