@@ -1,8 +1,8 @@
-use core::cell::Cell;
+use core::cell::RefCell;
 
 use async_scheduler::sync::mailbox::Mailbox;
 use critical_section::Mutex;
-use rtt_target::debug_rprintln;
+use rtt_target::{debug_rprintln, rprintln};
 use stm32g0_hal::gpio::Alternate;
 use stm32g0_hal::gpio::gpioa::{PA2, PA3};
 use stm32g0_hal::pac::dma1::CH;
@@ -22,17 +22,18 @@ impl LidarReader {
         dmamux: &DMAMUX,
         rcc: &Rcc,
     ) -> Self {
-        Self::init_usart(usart, rx_dma, dmamux, rcc);
+        Self::init_usart(&usart, rx_dma, dmamux, rcc);
+        Self::init_lidar(&usart);
 
         Self {}
     }
 
-    fn init_usart(usart: USART2, rx_dma: &CH, dmamux: &DMAMUX, rcc: &Rcc) {
+    fn init_usart(usart: &USART2, rx_dma: &CH, dmamux: &DMAMUX, rcc: &Rcc) {
         #[allow(unsafe_code)]
         unsafe {
             rx_dma
                 .par()
-                .write(|w| w.pa().bits(usart.rdr() as *const _ as u32));
+                .write(|w| w.pa().bits(core::ptr::from_ref(usart.rdr()) as u32));
             critical_section::with(|cs| {
                 let ptr = LIDAR_DMA_BUFFER.borrow(cs).as_ptr();
                 rx_dma.mar().write(|w| w.ma().bits(ptr as u32));
@@ -97,19 +98,78 @@ impl LidarReader {
         }
     }
 
+    fn send_lidar_command(usart: &USART2, cmd: &[u8]) {
+        for b in cmd {
+            while usart.isr().read().txe().is_full() {}
+            usart.tdr().write(|w| w.tdr().set((*b).into()));
+            while usart.isr().read().tc().is_tx_not_complete() {}
+        }
+    }
+
+    fn init_lidar(usart: &USART2) {
+        // rprintln!("reset lidar");
+        // Self::send_lidar_command(usart, &[0x5a, 4, 0x02, 0x00]);
+        rprintln!("get version");
+        Self::send_lidar_command(usart, &[0x5a, 4, 0x01, 0x00]);
+        // rprintln!("set freq");
+        // Self::send_lidar_command(usart, &[0x5a, 6, 0x03, 0xFA, 0x00, 0x00]);
+        // rprintln!("set format");
+        // Self::send_lidar_command(usart, &[0x5a, 5, 0x05, 0x01, 0x00]);
+        // rprintln!("enable output");
+        // Self::send_lidar_command(usart, &[0x5a, 5, 0x07, 0x01, 0x00]);
+    }
+
     pub async fn task(&self) -> Result<(), Error> {
+        const HALF_BUF_LEN: usize = LIDAR_BUFFER_SIZE / 2;
+        let mut buf = [0; HALF_BUF_LEN + 9];
+        let mut rem = 0;
         loop {
-            LIDAR_UPDATE_EVENT.read().await?;
-            debug_rprintln!("dma event");
+            let event = LIDAR_UPDATE_EVENT.read().await?;
+            debug_rprintln!("dma event {:?}", event);
+            critical_section::with(|cs| {
+                let dmabuf = LIDAR_DMA_BUFFER.borrow_ref(cs);
+                match event {
+                    LidarBufferEvent::FirstHalf => {
+                        buf[rem..rem + HALF_BUF_LEN].copy_from_slice(&dmabuf[..HALF_BUF_LEN])
+                    }
+                    LidarBufferEvent::SecondHalf => {
+                        buf[rem..rem + HALF_BUF_LEN].copy_from_slice(&dmabuf[HALF_BUF_LEN..])
+                    }
+                }
+            });
+            let mut databuf = [0; HALF_BUF_LEN / 8];
+            let mut di = 0;
+
+            let mut s = buf[..rem + HALF_BUF_LEN].as_ref();
+            while s.len() > 9 {
+                if s[0] != 0x59 || s[1] != 0x59 {
+                    s = &s[1..];
+                    continue;
+                }
+                databuf[di] = u16::from_le_bytes([s[2], s[3]]);
+                di += 1;
+                s = &s[9..];
+            }
+
+            let tail_start = rem + HALF_BUF_LEN - s.len();
+            rem = s.len();
+            buf.copy_within(tail_start..tail_start + rem, 0);
+
+            rprintln!("distance count {}, value {}", di, databuf[0]);
         }
     }
 }
 
 const LIDAR_BUFFER_SIZE: usize = 1024;
-static LIDAR_DMA_BUFFER: Mutex<Cell<[u8; LIDAR_BUFFER_SIZE]>> =
-    Mutex::new(Cell::new([0; LIDAR_BUFFER_SIZE]));
+static LIDAR_DMA_BUFFER: Mutex<RefCell<[u8; LIDAR_BUFFER_SIZE]>> =
+    Mutex::new(RefCell::new([1; LIDAR_BUFFER_SIZE]));
 
-static LIDAR_UPDATE_EVENT: Mailbox<()> = Mailbox::new();
+#[derive(PartialEq, Eq, Debug)]
+enum LidarBufferEvent {
+    FirstHalf,
+    SecondHalf,
+}
+static LIDAR_UPDATE_EVENT: Mailbox<LidarBufferEvent> = Mailbox::new();
 
 #[interrupt]
 fn DMA1_CHANNEL1() {
@@ -117,14 +177,12 @@ fn DMA1_CHANNEL1() {
     let rx_dma = unsafe { DMA1::steal() };
 
     if rx_dma.isr().read().htif1().is_half() {
-        // TODO: copy half data
         rx_dma.ifcr().write(|w| w.chtif1().clear());
+        LIDAR_UPDATE_EVENT.post(LidarBufferEvent::FirstHalf);
     }
 
     if rx_dma.isr().read().tcif1().is_complete() {
-        // TODO: copy second half data
         rx_dma.ifcr().write(|w| w.ctcif1().clear());
+        LIDAR_UPDATE_EVENT.post(LidarBufferEvent::SecondHalf);
     }
-
-    LIDAR_UPDATE_EVENT.post(());
 }
