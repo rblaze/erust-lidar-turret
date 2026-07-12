@@ -2,7 +2,7 @@ use core::cell::RefCell;
 
 use async_scheduler::sync::mailbox::Mailbox;
 use critical_section::Mutex;
-use rtt_target::{debug_rprintln, rprintln};
+use rtt_target::debug_rprintln;
 use stm32g0_hal::gpio::Alternate;
 use stm32g0_hal::gpio::gpioa::{PA2, PA3};
 use stm32g0_hal::pac::dma1::CH;
@@ -11,21 +11,26 @@ use stm32g0_hal::rcc::{Rcc, ResetEnable};
 
 use firmware::error::Error;
 
-pub struct LidarReader {}
+use crate::host_usart::HostUsart;
 
-impl LidarReader {
+pub struct LidarReader<'a> {
+    host_usart: &'a HostUsart<'a>,
+}
+
+impl<'a> LidarReader<'a> {
     pub fn new(
+        host_usart: &'a HostUsart,
         _usart_tx: PA2<Alternate<1>>,
         _usart_rx: PA3<Alternate<1>>,
         usart: USART2,
-        rx_dma: &CH,
+        dma: &DMA1,
         dmamux: &DMAMUX,
         rcc: &Rcc,
     ) -> Self {
-        Self::init_usart(&usart, rx_dma, dmamux, rcc);
+        Self::init_usart(&usart, dma.ch1(), dmamux, rcc);
         Self::init_lidar(&usart);
 
-        Self {}
+        Self { host_usart }
     }
 
     fn init_usart(usart: &USART2, rx_dma: &CH, dmamux: &DMAMUX, rcc: &Rcc) {
@@ -65,7 +70,7 @@ impl LidarReader {
 
         #[allow(unsafe_code)]
         unsafe {
-            // USART2 DMA request id is 52
+            // USART2 RX DMA request id is 52
             dmamux.ccr(0).write(|w| w.dmareq_id().bits(52));
         }
         // Enable DMA channel
@@ -107,25 +112,26 @@ impl LidarReader {
     }
 
     fn init_lidar(usart: &USART2) {
-        // rprintln!("reset lidar");
+        // debug_rprintln!("reset lidar");
         // Self::send_lidar_command(usart, &[0x5a, 4, 0x02, 0x00]);
-        rprintln!("get version");
+        debug_rprintln!("get version");
         Self::send_lidar_command(usart, &[0x5a, 4, 0x01, 0x00]);
-        // rprintln!("set freq");
+        // debug_rprintln!("set freq");
         // Self::send_lidar_command(usart, &[0x5a, 6, 0x03, 0xFA, 0x00, 0x00]);
-        // rprintln!("set format");
+        // debug_rprintln!("set format");
         // Self::send_lidar_command(usart, &[0x5a, 5, 0x05, 0x01, 0x00]);
-        // rprintln!("enable output");
+        // debug_rprintln!("enable output");
         // Self::send_lidar_command(usart, &[0x5a, 5, 0x07, 0x01, 0x00]);
     }
 
-    pub async fn task(&self) -> Result<(), Error> {
+    pub async fn task(&mut self) -> Result<(), Error> {
+        const REPORT_LENGTH: usize = 9;
         const HALF_BUF_LEN: usize = LIDAR_BUFFER_SIZE / 2;
-        let mut buf = [0; HALF_BUF_LEN + 9];
+        let mut buf = [0; HALF_BUF_LEN + REPORT_LENGTH];
         let mut rem = 0;
         loop {
             let event = LIDAR_UPDATE_EVENT.read().await?;
-            debug_rprintln!("dma event {:?}", event);
+            // debug_rprintln!("dma event {:?}", event);
             critical_section::with(|cs| {
                 let dmabuf = LIDAR_DMA_BUFFER.borrow_ref(cs);
                 match event {
@@ -137,25 +143,32 @@ impl LidarReader {
                     }
                 }
             });
-            let mut databuf = [0; HALF_BUF_LEN / 8];
+            let mut databuf = [0; 2 + 2 * HALF_BUF_LEN / REPORT_LENGTH];
             let mut di = 0;
 
             let mut s = buf[..rem + HALF_BUF_LEN].as_ref();
-            while s.len() > 9 {
+            while s.len() >= REPORT_LENGTH {
                 if s[0] != 0x59 || s[1] != 0x59 {
                     s = &s[1..];
                     continue;
                 }
-                databuf[di] = u16::from_le_bytes([s[2], s[3]]);
-                di += 1;
-                s = &s[9..];
+                databuf[di] = s[2];
+                databuf[di + 1] = s[3];
+                di += 2;
+                s = &s[REPORT_LENGTH..];
             }
 
             let tail_start = rem + HALF_BUF_LEN - s.len();
             rem = s.len();
             buf.copy_within(tail_start..tail_start + rem, 0);
 
-            rprintln!("distance count {}, value {}", di, databuf[0]);
+            // debug_rprintln!(
+            //     "distance count {}, sample value {}",
+            //     di,
+            //     u16::from_le_bytes([databuf[0], databuf[1]])
+            // );
+
+            self.host_usart.write(&databuf[..di])?;
         }
     }
 }

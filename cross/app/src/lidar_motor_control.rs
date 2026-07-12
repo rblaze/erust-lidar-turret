@@ -115,7 +115,7 @@ impl LidarMotorControl {
         check_interval: Duration,
     ) -> Result<(), Error> {
         let mut motor_pin = self.motor_pwm.bind_pin(self.motor_pin);
-        let duty = motor_pin.max_duty_cycle() / 10;
+        let duty = motor_pin.max_duty_cycle() / 5;
         motor_pin.set_duty_cycle(duty);
 
         // Let motor spin up

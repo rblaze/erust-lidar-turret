@@ -3,6 +3,7 @@
 #![deny(unsafe_code)]
 
 mod env;
+mod host_usart;
 mod lidar_motor_control;
 mod lidar_reader;
 mod system_time;
@@ -66,6 +67,7 @@ fn main() -> ! {
         let rcc = dp.RCC.constrain(clocks);
 
         let gpioa = dp.GPIOA.split(&rcc);
+        let gpiob = dp.GPIOB.split(&rcc);
 
         let motor_pwm = dp.TIM3.constrain().pwm(0, u16::MAX, &rcc);
         let motor_control = LidarMotorControl::new(
@@ -80,11 +82,21 @@ fn main() -> ! {
         DMA1::enable(&rcc);
         DMA1::reset(&rcc);
 
-        let lidar_reader = lidar_reader::LidarReader::new(
+        let host_usart = host_usart::HostUsart::new(
+            gpiob.pb10.into_alternate_function(),
+            gpiob.pb11.into_alternate_function(),
+            dp.USART3,
+            &dp.DMA1,
+            &dp.DMAMUX,
+            &rcc,
+        );
+
+        let mut lidar_reader = lidar_reader::LidarReader::new(
+            &host_usart,
             gpioa.pa2.into_alternate_function(),
             gpioa.pa3.into_alternate_function(),
             dp.USART2,
-            dp.DMA1.ch1(),
+            &dp.DMA1,
             &dp.DMAMUX,
             &rcc,
         );
@@ -100,16 +112,6 @@ fn main() -> ! {
         ]);
 
         unreachable!()
-
-        // for ch in [0x5a, 0x04, 0x01, 0x00] {
-        //     while usart.isr().read().txe().bit_is_clear() {}
-        //     debug_rprintln!("sending {:02x}", ch);
-        //     usart.tdr().write(|w| w.tdr().set(ch));
-        // }
-
-        // while usart.isr().read().tc().bit_is_clear() {}
-
-        // debug_rprintln!("done sending");
     }()
     .expect("error in main");
 

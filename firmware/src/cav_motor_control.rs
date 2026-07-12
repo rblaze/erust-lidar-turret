@@ -22,7 +22,8 @@ where
         let average_interval = speed_data.iter().sum::<u32>() / (NUM_POINTS as u32);
         let error = average_interval as f32 / desired_interval as f32;
 
-        duty = (duty as f32 * error.clamp(0.9, 1.1)) as u16;
+        // Clamp changes to 5% to avoid overshooting and oscillation.
+        duty = (duty as f32 * error.clamp(0.95, 1.05)) as u16;
 
         debug_rprintln!(
             "actual: {}, desired: {}, error: {}, duty: {}",

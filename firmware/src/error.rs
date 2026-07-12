@@ -8,6 +8,10 @@ pub enum Error {
     AlreadyTaken,
     #[error(transparent)]
     Mailbox(#[from] async_scheduler::mailbox::Error),
+    #[error("Device busy")]
+    DeviceBusy,
+    #[error("Buffer overrun")]
+    BufferOverrun,
 }
 
 impl From<Infallible> for Error {
