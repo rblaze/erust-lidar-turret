@@ -65,17 +65,19 @@ fn main() -> ! {
 
         let clocks = Config::sysclk_hsi(Prescaler::Div1);
         let rcc = dp.RCC.constrain(clocks);
+        let mut exti = dp.EXTI;
 
         let gpioa = dp.GPIOA.split(&rcc);
         let gpiob = dp.GPIOB.split(&rcc);
 
-        let motor_pwm = dp.TIM3.constrain().pwm(0, u16::MAX, &rcc);
+        // Set PWM cycle to 10000 Hz to reduce power noise
+        let max_duty = (rcc.sysclk().to_Hz() / 10000).clamp(0, u16::MAX as u32);
+        let motor_pwm = dp.TIM3.constrain().pwm(0, max_duty as u16, &rcc);
         let motor_control = LidarMotorControl::new(
             motor_pwm,
             gpioa.pa6.into_alternate_function(),
-            dp.TIM2,
-            gpioa.pa0.into_alternate_function(),
-            &rcc,
+            gpioa.pa1.into_floating_input(),
+            &mut exti,
             HertzU32::Hz(1),
         );
 
@@ -107,7 +109,7 @@ fn main() -> ! {
         LocalExecutor::new(&env).run([
             LocalFutureObj::new(pin!(panic_if_exited(lidar_reader.task()))),
             LocalFutureObj::new(pin!(panic_if_exited(
-                motor_control.task(Duration::from_secs(1), Duration::from_secs(2))
+                motor_control.task(Duration::from_secs(1))
             ))),
         ]);
 

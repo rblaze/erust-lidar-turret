@@ -2,9 +2,9 @@ use core::cell::Cell;
 
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::exception;
-use critical_section::Mutex;
+use critical_section::{CriticalSection, Mutex};
 
-use stm32g0_hal::pac::SYST;
+use stm32g0_hal::pac::{SCB, SYST};
 use stm32g0_hal::rcc::Rcc;
 
 use firmware::time::{Instant, TimerTicks};
@@ -23,7 +23,7 @@ impl Ticker {
         syst.enable_interrupt();
         syst.enable_counter();
 
-        Ticker {}
+        Self {}
     }
 
     // Get current tick count.
@@ -42,6 +42,22 @@ impl Ticker {
     // Makes sure the ticker is enabled.
     pub fn wait_for_tick(&self) {
         cortex_m::asm::wfi();
+    }
+
+    // Get sysclk ticks for precise timers
+    #[allow(unsafe_code)]
+    pub unsafe fn systicks(cs: CriticalSection) -> u64 {
+        let mut ticks = TICKS.borrow(cs).get() as u64;
+        let scale = SYST::get_reload() as u64;
+        // Timer counts down
+        let current = scale - SYST::get_current() as u64;
+
+        if SCB::is_pendst_pending() {
+            // Ticks wait to be updated
+            ticks += 1;
+        }
+
+        ticks * scale + current
     }
 }
 
