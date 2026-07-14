@@ -2,80 +2,33 @@ use core::cell::RefCell;
 
 use async_scheduler::sync::mailbox::Mailbox;
 use critical_section::Mutex;
+use firmware::distance_queue::DistanceQueue;
 use rtt_target::debug_rprintln;
 use stm32g0_hal::gpio::Alternate;
 use stm32g0_hal::gpio::gpioa::{PA2, PA3};
-use stm32g0_hal::pac::dma1::CH;
-use stm32g0_hal::pac::{DMA1, DMAMUX, Interrupt, NVIC, USART2, interrupt};
+use stm32g0_hal::pac::{Interrupt, NVIC, USART2, interrupt};
 use stm32g0_hal::rcc::{Rcc, ResetEnable};
 
 use firmware::error::Error;
 
-use crate::host_usart::HostUsart;
+use crate::host_usart::HOST_USART_EVENT;
 
-pub struct LidarReader<'a> {
-    host_usart: &'a HostUsart<'a>,
-}
+pub struct LidarReader {}
 
-impl<'a> LidarReader<'a> {
+impl LidarReader {
     pub fn new(
-        host_usart: &'a HostUsart,
         _usart_tx: PA2<Alternate<1>>,
         _usart_rx: PA3<Alternate<1>>,
         usart: USART2,
-        dma: &DMA1,
-        dmamux: &DMAMUX,
         rcc: &Rcc,
     ) -> Self {
-        Self::init_usart(&usart, dma.ch1(), dmamux, rcc);
+        Self::init_usart(&usart, rcc);
         Self::init_lidar(&usart);
 
-        Self { host_usart }
+        Self {}
     }
 
-    fn init_usart(usart: &USART2, rx_dma: &CH, dmamux: &DMAMUX, rcc: &Rcc) {
-        #[allow(unsafe_code)]
-        unsafe {
-            rx_dma
-                .par()
-                .write(|w| w.pa().bits(core::ptr::from_ref(usart.rdr()) as u32));
-            critical_section::with(|cs| {
-                let ptr = LIDAR_DMA_BUFFER.borrow(cs).as_ptr();
-                rx_dma.mar().write(|w| w.ma().bits(ptr as u32));
-            });
-        }
-        rx_dma
-            .ndtr()
-            .write(|w| w.ndt().set(LIDAR_BUFFER_SIZE as u16));
-        rx_dma.cr().write(|w| {
-            w.mem2mem()
-                .disabled()
-                .msize()
-                .bits8()
-                .minc()
-                .enabled()
-                .psize()
-                .bits32()
-                .pinc()
-                .disabled()
-                .circ()
-                .enabled()
-                .dir()
-                .from_peripheral()
-                .htie()
-                .enabled()
-                .tcie()
-                .enabled()
-        });
-
-        #[allow(unsafe_code)]
-        unsafe {
-            // USART2 RX DMA request id is 52
-            dmamux.ccr(0).write(|w| w.dmareq_id().bits(52));
-        }
-        // Enable DMA channel
-        rx_dma.cr().modify(|_, w| w.en().enabled());
-
+    fn init_usart(usart: &USART2, rcc: &Rcc) {
         // USART for communicating with LIDAR
         USART2::enable(rcc);
         USART2::reset(rcc);
@@ -89,17 +42,20 @@ impl<'a> LidarReader<'a> {
         // Set bit rate to 115200. Assume usart_presc=1, USART running at MCU clock.
         let usart_div = rcc.sysclk().to_Hz() / 115200;
         usart.brr().write(|w| w.brr().set(usart_div as u16));
+        // Enable RX FIFO
+        usart.cr1().modify(|_, w| w.fifoen().enabled());
+        usart
+            .cr3()
+            .modify(|_, w| w.rxftie().enabled().rxftcfg().depth_7_8());
         // Enable USART
         usart.cr1().modify(|_, w| w.ue().enabled());
-        // Enable RX DMA
-        usart.cr3().write(|w| w.dmar().enabled());
         // Enable transmitter and receiver.
         usart.cr1().modify(|_, w| w.te().enabled().re().enabled());
 
         // Enable interrupts
         #[allow(unsafe_code)]
         unsafe {
-            NVIC::unmask(Interrupt::DMA1_CHANNEL1);
+            NVIC::unmask(Interrupt::USART2);
         }
     }
 
@@ -116,8 +72,8 @@ impl<'a> LidarReader<'a> {
         // Self::send_lidar_command(usart, &[0x5a, 4, 0x02, 0x00]);
         debug_rprintln!("get version");
         Self::send_lidar_command(usart, &[0x5a, 4, 0x01, 0x00]);
-        // debug_rprintln!("set freq");
-        // Self::send_lidar_command(usart, &[0x5a, 6, 0x03, 0xFA, 0x00, 0x00]);
+        debug_rprintln!("set freq");
+        Self::send_lidar_command(usart, &[0x5a, 6, 0x03, 0xfa, 0x00, 0x00]);
         // debug_rprintln!("set format");
         // Self::send_lidar_command(usart, &[0x5a, 5, 0x05, 0x01, 0x00]);
         // debug_rprintln!("enable output");
@@ -125,77 +81,39 @@ impl<'a> LidarReader<'a> {
     }
 
     pub async fn task(&mut self) -> Result<(), Error> {
-        const REPORT_LENGTH: usize = 9;
-        const HALF_BUF_LEN: usize = LIDAR_BUFFER_SIZE / 2;
-        let mut buf = [0; HALF_BUF_LEN + REPORT_LENGTH];
-        let mut rem = 0;
         loop {
-            let event = LIDAR_UPDATE_EVENT.read().await?;
-            // debug_rprintln!("dma event {:?}", event);
             critical_section::with(|cs| {
-                let dmabuf = LIDAR_DMA_BUFFER.borrow_ref(cs);
-                match event {
-                    LidarBufferEvent::FirstHalf => {
-                        buf[rem..rem + HALF_BUF_LEN].copy_from_slice(&dmabuf[..HALF_BUF_LEN])
-                    }
-                    LidarBufferEvent::SecondHalf => {
-                        buf[rem..rem + HALF_BUF_LEN].copy_from_slice(&dmabuf[HALF_BUF_LEN..])
-                    }
+                let mut queue = DISTANCE_QUEUE.borrow_ref_mut(cs);
+                while queue.read_for_lidar().is_some() {
+                    // TODO: use lidar data
                 }
             });
-            let mut databuf = [0; 2 + 2 * HALF_BUF_LEN / REPORT_LENGTH];
-            let mut di = 0;
 
-            let mut s = buf[..rem + HALF_BUF_LEN].as_ref();
-            while s.len() >= REPORT_LENGTH {
-                if s[0] != 0x59 || s[1] != 0x59 {
-                    s = &s[1..];
-                    continue;
-                }
-                databuf[di] = s[2];
-                databuf[di + 1] = s[3];
-                di += 2;
-                s = &s[REPORT_LENGTH..];
-            }
-
-            let tail_start = rem + HALF_BUF_LEN - s.len();
-            rem = s.len();
-            buf.copy_within(tail_start..tail_start + rem, 0);
-
-            // debug_rprintln!(
-            //     "distance count {}, sample value {}",
-            //     di,
-            //     u16::from_le_bytes([databuf[0], databuf[1]])
-            // );
-
-            self.host_usart.write(&databuf[..di])?;
+            LIDAR_UPDATE_EVENT.read().await?;
         }
     }
 }
 
-const LIDAR_BUFFER_SIZE: usize = 1024;
-static LIDAR_DMA_BUFFER: Mutex<RefCell<[u8; LIDAR_BUFFER_SIZE]>> =
-    Mutex::new(RefCell::new([1; LIDAR_BUFFER_SIZE]));
-
-#[derive(PartialEq, Eq, Debug)]
-enum LidarBufferEvent {
-    FirstHalf,
-    SecondHalf,
-}
-static LIDAR_UPDATE_EVENT: Mailbox<LidarBufferEvent> = Mailbox::new();
+pub static DISTANCE_QUEUE: Mutex<RefCell<DistanceQueue>> =
+    Mutex::new(RefCell::new(DistanceQueue::new()));
+static LIDAR_UPDATE_EVENT: Mailbox<()> = Mailbox::new();
 
 #[interrupt]
-fn DMA1_CHANNEL1() {
+fn USART2() {
     #[allow(unsafe_code)]
-    let rx_dma = unsafe { DMA1::steal() };
+    let usart = unsafe { USART2::steal() };
 
-    if rx_dma.isr().read().htif1().is_half() {
-        rx_dma.ifcr().write(|w| w.chtif1().clear());
-        LIDAR_UPDATE_EVENT.post(LidarBufferEvent::FirstHalf);
-    }
+    if usart.isr().read().rxft().is_reached() {
+        critical_section::with(|cs| {
+            let mut queue = DISTANCE_QUEUE.borrow_ref_mut(cs);
 
-    if rx_dma.isr().read().tcif1().is_complete() {
-        rx_dma.ifcr().write(|w| w.ctcif1().clear());
-        LIDAR_UPDATE_EVENT.post(LidarBufferEvent::SecondHalf);
+            while usart.isr().read().rxne().is_data_ready() {
+                let byte = (usart.rdr().read().rdr().bits() & 0xff) as u8;
+                if queue.push_byte(byte).expect("distance queue overrun") {
+                    LIDAR_UPDATE_EVENT.post(());
+                    HOST_USART_EVENT.post(());
+                }
+            }
+        });
     }
 }

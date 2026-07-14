@@ -10,8 +10,8 @@ pub enum Error {
     Mailbox(#[from] async_scheduler::mailbox::Error),
     #[error("Device busy")]
     DeviceBusy,
-    #[error("Buffer overrun")]
-    BufferOverrun,
+    #[error("Queue overrun")]
+    QueueOverrun,
 }
 
 impl From<Infallible> for Error {

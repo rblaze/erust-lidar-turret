@@ -1,5 +1,6 @@
 use core::cell::Cell;
 
+use async_scheduler::sync::mailbox::Mailbox;
 use critical_section::Mutex;
 use firmware::error::Error;
 use rtt_target::debug_rprintln;
@@ -8,6 +9,8 @@ use stm32g0_hal::gpio::gpiob::{PB10, PB11};
 use stm32g0_hal::pac::dma1::CH;
 use stm32g0_hal::pac::{DMA1, DMAMUX, Interrupt, NVIC, USART3, interrupt};
 use stm32g0_hal::rcc::{Rcc, ResetEnable};
+
+use crate::lidar_reader::DISTANCE_QUEUE;
 
 pub struct HostUsart<'a> {
     tx_dma: &'a CH,
@@ -95,11 +98,20 @@ impl<'a> HostUsart<'a> {
         }
     }
 
-    pub fn write(&self, buf: &[u8]) -> Result<usize, Error> {
-        if buf.len() + 2 > TX_BUFFER_SIZE {
-            return Err(Error::BufferOverrun);
-        }
+    pub async fn task(&self) -> Result<(), Error> {
+        loop {
+            critical_section::with(|cs| {
+                if let Some(value) = DISTANCE_QUEUE.borrow_ref_mut(cs).read_for_host_usart() {
+                    self.write(value)?;
+                }
+                Ok::<(), Error>(())
+            })?;
 
+            HOST_USART_EVENT.read().await?;
+        }
+    }
+
+    fn write(&self, value: u16) -> Result<(), Error> {
         let btrem = self.tx_dma.ndtr().read().ndt().bits();
         if self.tx_dma.ndtr().read().ndt() != 0 {
             debug_rprintln!("host tx dma busy, ndtr={}", btrem);
@@ -109,27 +121,20 @@ impl<'a> HostUsart<'a> {
         // Disable DMA channel to allow reconfiguration.
         self.tx_dma.cr().modify(|_, w| w.en().disabled());
 
-        let mut tx_buf = [0; _];
-
-        tx_buf[0..buf.len()].copy_from_slice(buf);
-        tx_buf[buf.len()] = 0xff;
-        tx_buf[buf.len() + 1] = 0xff;
-
         critical_section::with(|cs| {
-            HOST_TX_BUFFER.borrow(cs).set(tx_buf);
+            HOST_TX_BUFFER.borrow(cs).set(value.to_le_bytes());
         });
 
-        self.tx_dma
-            .ndtr()
-            .write(|w| w.ndt().set(buf.len() as u16 + 2));
+        self.tx_dma.ndtr().write(|w| w.ndt().set(2));
         self.tx_dma.cr().modify(|_, w| w.en().enabled());
 
-        Ok(buf.len())
+        Ok(())
     }
 }
 
-const TX_BUFFER_SIZE: usize = 128;
+const TX_BUFFER_SIZE: usize = 2;
 static HOST_TX_BUFFER: Mutex<Cell<[u8; TX_BUFFER_SIZE]>> = Mutex::new(Cell::new([0; _]));
+pub static HOST_USART_EVENT: Mailbox<()> = Mailbox::new();
 
 #[interrupt]
 fn DMA1_CHANNEL2_3() {
@@ -138,5 +143,6 @@ fn DMA1_CHANNEL2_3() {
 
     if dma.isr().read().tcif2().is_complete() {
         dma.ifcr().write(|w| w.ctcif2().clear());
+        HOST_USART_EVENT.post(());
     }
 }

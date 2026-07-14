@@ -94,12 +94,9 @@ fn main() -> ! {
         );
 
         let mut lidar_reader = lidar_reader::LidarReader::new(
-            &host_usart,
             gpioa.pa2.into_alternate_function(),
             gpioa.pa3.into_alternate_function(),
             dp.USART2,
-            &dp.DMA1,
-            &dp.DMAMUX,
             &rcc,
         );
 
@@ -107,6 +104,7 @@ fn main() -> ! {
 
         let env = Env::new(Ticker::new(cp.SYST, &rcc));
         LocalExecutor::new(&env).run([
+            LocalFutureObj::new(pin!(panic_if_exited(host_usart.task()))),
             LocalFutureObj::new(pin!(panic_if_exited(lidar_reader.task()))),
             LocalFutureObj::new(pin!(panic_if_exited(
                 motor_control.task(Duration::from_secs(1))

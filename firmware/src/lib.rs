@@ -2,6 +2,7 @@
 #![deny(unsafe_code)]
 
 pub mod cav_motor_control;
+pub mod distance_queue;
 pub mod error;
 pub mod time;
 pub mod types;

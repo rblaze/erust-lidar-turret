@@ -27,20 +27,21 @@ impl Environment for Env {
             "calling wait_for_event_with_deadline() in interrupt handler"
         );
 
-        while critical_section::with(|_| {
+        critical_section::with(|_| {
             if event.load(Ordering::Acquire) {
-                true
-            } else if let Some(deadline) = tick
+                return;
+            }
+
+            if let Some(deadline) = tick
                 && deadline <= self.ticks()
             {
-                true
-            } else {
-                // Critical section prevents interrupt handler from updating 'event' here.
-                // Pending interrupt will wake up CPU and exit critical section.
-                self.ticker.wait_for_tick();
-                false
+                return;
             }
-        }) {}
+
+            // Critical section prevents interrupt handler from updating 'event' here.
+            // Pending interrupt will wake up CPU and exit critical section.
+            self.ticker.wait_for_tick();
+        });
     }
 
     fn ticks(&self) -> async_scheduler::time::Instant {

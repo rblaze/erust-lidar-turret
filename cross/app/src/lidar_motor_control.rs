@@ -14,6 +14,8 @@ use stm32g0_hal::timer::Pwm;
 use firmware::error::Error;
 use firmware::time::{Duration, sleep};
 
+use crate::host_usart::HOST_USART_EVENT;
+use crate::lidar_reader::DISTANCE_QUEUE;
 use crate::system_time::Ticker;
 
 pub struct LidarMotorControl {
@@ -52,7 +54,7 @@ impl LidarMotorControl {
 
     pub async fn task(self, initial_delay: Duration) -> Result<(), Error> {
         let mut motor_pin = self.motor_pwm.bind_pin(self.motor_pin);
-        let duty = motor_pin.max_duty_cycle() / 3;
+        let duty = motor_pin.max_duty_cycle() / 2;
         motor_pin.set_duty_cycle(duty);
 
         // Let motor spin up
@@ -112,6 +114,10 @@ fn EXTI0_1() {
         if event_duration > MIN_DELAY {
             // debug_rprintln!("Mark");
             WHEEL_MARK.post(());
+            critical_section::with(|cs| {
+                DISTANCE_QUEUE.borrow_ref_mut(cs).set_mark_for_host_usart()
+            });
+            HOST_USART_EVENT.post(());
         }
     }
 }
