@@ -26,21 +26,22 @@ where
     Mark: EventWaiter,
     Error: From<SpeedControl::Error>,
 {
+    const ROTATIONS_TO_AVERAGE: u32 = 2;
     let max_duty = speed_control.max_duty_cycle();
     let mut duty = initial_duty;
     let mut last_mark_time = get_mark_time(&mark).await;
 
     loop {
-        for _ in 0..4 {
-            // Use average of 5 rotations
+        for _ in 1..ROTATIONS_TO_AVERAGE {
+            // Use average of ROTATIONS_TO_AVERAGE marks to reduce jitter
+            // in the speed measurement.
             get_mark_time(&mark).await;
         }
         let mark_time = get_mark_time(&mark).await;
-        let actual_interval = (mark_time - last_mark_time) / 5;
+        let actual_interval = (mark_time - last_mark_time) / ROTATIONS_TO_AVERAGE;
 
         // Clamp changes to 5% to avoid overshooting and oscillation.
         duty = get_next_duty(duty, actual_interval, desired_interval).clamp(0, max_duty);
-        last_mark_time = mark_time;
 
         debug_rprintln!(
             "actual: {}, desired: {}, duty: {}",
@@ -50,6 +51,10 @@ where
         );
 
         speed_control.set_duty_cycle(duty)?;
+
+        // Wait one mark before measuring again to let the motor speed stabilize
+        // after changing the duty cycle.
+        last_mark_time = get_mark_time(&mark).await;
     }
 }
 

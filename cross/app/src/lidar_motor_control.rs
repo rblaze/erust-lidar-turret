@@ -108,11 +108,10 @@ fn EXTI0_1() {
             now - last_raise
         });
 
-        // Debouncing: require at least 1 ms pulse; assume 16MHz CPU freq
+        // Debouncing: require at least 0.1 ms pulse; assume 16MHz CPU freq
         // TODO: get CPU frequency from RCC clocks
-        const MIN_DELAY: u64 = 16_000_000 / 1000;
+        const MIN_DELAY: u64 = 16_000_000 / 10000;
         if event_duration > MIN_DELAY {
-            // debug_rprintln!("Mark");
             WHEEL_MARK.post(());
             critical_section::with(|cs| {
                 DISTANCE_QUEUE.borrow_ref_mut(cs).set_mark_for_host_usart()
