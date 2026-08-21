@@ -6,6 +6,6 @@ edition = "2024"
 [dependencies]
 async-scheduler = { git = "https://github.com/rblaze/rust-async-scheduler.git" }
 embedded-hal = "1"
-fugit = "0.4"
+fugit = "0.5"
 rtt-target = "0.6"
 thiserror = { version = "2", default-features = false }
