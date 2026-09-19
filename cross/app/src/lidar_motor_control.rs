@@ -92,16 +92,14 @@ fn EXTI0_1() {
 
     if rising {
         critical_section::with(|cs| {
-            #[allow(unsafe_code)]
-            let now = unsafe { Ticker::systicks(cs) };
+            let now = Ticker::systicks(cs);
             LAST_RAISE.borrow(cs).set(now);
         });
     }
 
     if falling {
         let event_duration = critical_section::with(|cs| {
-            #[allow(unsafe_code)]
-            let now = unsafe { Ticker::systicks(cs) };
+            let now = Ticker::systicks(cs);
             let last_raise = LAST_RAISE.borrow(cs).replace(now);
             // debug_rprintln!("delta {} last {} now {}", now - last_raise, last_raise, now);
 
