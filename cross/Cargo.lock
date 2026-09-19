@@ -109,9 +109,9 @@ dependencies = [
 
 [[package]]
 name = "fugit"
-version = "0.4.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04ae150b98ef345142101da0a0b4ccfcc577bc8f5b9778b852e9427c667654d3"
+checksum = "60ee0e9ed8a394868ee05cde8705cbd8dbfc95f88e14a57134323e799bd3912a"
 dependencies = [
  "gcd",
 ]
@@ -305,7 +305,7 @@ dependencies = [
 [[package]]
 name = "stm32g0-hal"
 version = "0.2.1"
-source = "git+https://github.com/rblaze/erust-stm32g0-hal.git#2a37edf32676609b39df86b2c41c190ba24e9735"
+source = "git+https://github.com/rblaze/erust-stm32g0-hal.git#275c448653794c3a93e0678158b3f1dbbf0ec214"
 dependencies = [
  "cortex-m",
  "critical-section",

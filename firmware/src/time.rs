@@ -1,9 +1,9 @@
-use fugit::{TimerDuration, TimerInstant};
+use fugit::{TimerDuration, MonotonicTimerInstant};
 
 const TIMER_FREQ: u64 = 100;
 
 pub type TimerTicks = u32;
-pub type Instant = TimerInstant<TimerTicks, TIMER_FREQ>;
+pub type Instant = MonotonicTimerInstant<TimerTicks, TIMER_FREQ>;
 pub type Duration = TimerDuration<TimerTicks, TIMER_FREQ>;
 
 /// Sleeps for the specified duration.
