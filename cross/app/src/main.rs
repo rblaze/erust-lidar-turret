@@ -4,6 +4,7 @@
 
 mod env;
 mod host_usart;
+mod laser_motor_control;
 mod lidar_motor_control;
 mod lidar_reader;
 mod system_time;
@@ -67,6 +68,8 @@ fn main() -> ! {
         let rcc = dp.RCC.constrain(clocks);
         let mut exti = dp.EXTI;
 
+        let ticker = Ticker::new(cp.SYST, &rcc);
+
         let gpioa = dp.GPIOA.split(&rcc);
         let gpiob = dp.GPIOB.split(&rcc);
 
@@ -93,6 +96,16 @@ fn main() -> ! {
             &rcc,
         );
 
+        let laser_motor_control = laser_motor_control::LaserMotorControl::new(
+            gpioa.pa8.into_push_pull_output(),
+            gpioa.pa9.into_push_pull_output(),
+            gpioa.pa10.into_push_pull_output(),
+            gpioa.pa11.into_push_pull_output(),
+            gpioa.pa0.into_floating_input(),
+            dp.TIM6.constrain(),
+            &rcc,
+        );
+
         let mut lidar_reader = lidar_reader::LidarReader::new(
             gpioa.pa2.into_alternate_function(),
             gpioa.pa3.into_alternate_function(),
@@ -102,10 +115,11 @@ fn main() -> ! {
 
         debug_rprintln!("entering control loop");
 
-        let env = Env::new(Ticker::new(cp.SYST, &rcc));
+        let env = Env::new(ticker);
         LocalExecutor::new(&env).run([
             LocalFutureObj::new(pin!(panic_if_exited(host_usart.task()))),
             LocalFutureObj::new(pin!(panic_if_exited(lidar_reader.task()))),
+            LocalFutureObj::new(pin!(panic_if_exited(laser_motor_control.task(ticker)))),
             LocalFutureObj::new(pin!(panic_if_exited(
                 motor_control.task(Duration::from_secs(1))
             ))),

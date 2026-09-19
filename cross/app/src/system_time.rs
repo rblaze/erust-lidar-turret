@@ -45,7 +45,8 @@ impl Ticker {
     }
 
     // Get sysclk ticks for precise timers
-    pub fn systicks(cs: CriticalSection) -> u64 {
+    #[allow(unsafe_code, unused)]
+    pub unsafe fn systicks(cs: CriticalSection) -> u64 {
         let mut ticks = TICKS.borrow(cs).get() as u64;
         let scale = SYST::get_reload() as u64;
         // Timer counts down

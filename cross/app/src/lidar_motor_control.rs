@@ -1,7 +1,4 @@
-use core::cell::Cell;
-
 use async_scheduler::sync::mailbox::Mailbox;
-use critical_section::Mutex;
 use embedded_hal::pwm::SetDutyCycle;
 use firmware::types::EventWaiter;
 use fugit::HertzU32;
@@ -16,7 +13,6 @@ use firmware::time::{Duration, sleep};
 
 use crate::host_usart::HOST_USART_EVENT;
 use crate::lidar_reader::DISTANCE_QUEUE;
-use crate::system_time::Ticker;
 
 pub struct LidarMotorControl {
     motor_pwm: Pwm<TIM3>,
@@ -43,7 +39,7 @@ impl LidarMotorControl {
 
     fn init_speed_timer(mut mark_pin: PA1<Input<Floating>>, exti: &mut EXTI) {
         mark_pin.make_interrupt_source(exti);
-        mark_pin.trigger_on_edge(SignalEdge::Both, exti);
+        mark_pin.trigger_on_edge(SignalEdge::Falling, exti);
         exti.listen(Event::Gpio1);
 
         #[allow(unsafe_code)]
@@ -79,42 +75,18 @@ impl EventWaiter for MarkWaiter {
 }
 
 static WHEEL_MARK: Mailbox<()> = Mailbox::new();
-static LAST_RAISE: Mutex<Cell<u64>> = Mutex::new(Cell::new(0));
 
 #[interrupt]
 fn EXTI0_1() {
     #[allow(unsafe_code)]
     let exti = unsafe { EXTI::steal() };
 
-    let rising = exti.is_pending(Event::Gpio1, SignalEdge::Rising);
     let falling = exti.is_pending(Event::Gpio1, SignalEdge::Falling);
     exti.unpend(Event::Gpio1);
 
-    if rising {
-        critical_section::with(|cs| {
-            let now = Ticker::systicks(cs);
-            LAST_RAISE.borrow(cs).set(now);
-        });
-    }
-
     if falling {
-        let event_duration = critical_section::with(|cs| {
-            let now = Ticker::systicks(cs);
-            let last_raise = LAST_RAISE.borrow(cs).replace(now);
-            // debug_rprintln!("delta {} last {} now {}", now - last_raise, last_raise, now);
-
-            now - last_raise
-        });
-
-        // Debouncing: require at least 0.1 ms pulse; assume 16MHz CPU freq
-        // TODO: get CPU frequency from RCC clocks
-        const MIN_DELAY: u64 = 16_000_000 / 10000;
-        if event_duration > MIN_DELAY {
-            WHEEL_MARK.post(());
-            critical_section::with(|cs| {
-                DISTANCE_QUEUE.borrow_ref_mut(cs).set_mark_for_host_usart()
-            });
-            HOST_USART_EVENT.post(());
-        }
+        WHEEL_MARK.post(());
+        critical_section::with(|cs| DISTANCE_QUEUE.borrow_ref_mut(cs).set_mark_for_host_usart());
+        HOST_USART_EVENT.post(());
     }
 }
