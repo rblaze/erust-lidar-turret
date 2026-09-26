@@ -1,4 +1,4 @@
-use fugit::{TimerDuration, MonotonicTimerInstant};
+use fugit::{MonotonicTimerInstant, TimerDuration};
 
 const TIMER_FREQ: u64 = 100;
 
