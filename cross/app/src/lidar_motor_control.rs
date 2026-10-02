@@ -86,7 +86,7 @@ fn EXTI0_1() {
 
     if falling {
         WHEEL_MARK.post(());
-        critical_section::with(|cs| DISTANCE_QUEUE.borrow_ref_mut(cs).set_mark_for_host_usart());
+        critical_section::with(|cs| DISTANCE_QUEUE.borrow_ref_mut(cs).set_zero_mark());
         HOST_USART_EVENT.post(());
     }
 }

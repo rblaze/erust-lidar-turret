@@ -2,6 +2,7 @@ use core::cell::Cell;
 
 use async_scheduler::sync::mailbox::Mailbox;
 use critical_section::Mutex;
+use firmware::distance_queue::Report;
 use firmware::error::Error;
 use rtt_target::debug_rprintln;
 use stm32g0_hal::gpio::Alternate;
@@ -99,10 +100,17 @@ impl<'a> HostUsart<'a> {
     }
 
     pub async fn task(&self) -> Result<(), Error> {
+        let mut last_value = 0;
         loop {
             critical_section::with(|cs| {
-                if let Some(value) = DISTANCE_QUEUE.borrow_ref_mut(cs).read_for_host_usart() {
-                    self.write(value)?;
+                match DISTANCE_QUEUE.borrow_ref_mut(cs).read_for_host_usart() {
+                    Some(Report::Value(value)) => {
+                        last_value = value;
+                        self.write(value)?
+                    }
+                    Some(Report::ZeroMark) => self.write(0xFFFF)?,
+                    Some(Report::Unreliable) => self.write(last_value)?,
+                    None => {}
                 }
                 Ok::<(), Error>(())
             })?;
